@@ -1,0 +1,861 @@
+# NWW-V12 人物卡 Schema v1.0
+# 12层角色行为约束系统（Character Bible + Runtime Contract）
+# 角色卡不是人物简介，而是 AI 长篇创作中的角色行为约束系统
+# 核心目标：100章后角色不漂移、不因剧情强行改性格、不同角色说话有区别
+
+schema_version: "1.0.0"
+
+# ═══════════════════════════════════════════════════════════
+# 权重排序（长篇网文 AI 角色稳定性）
+# ═══════════════════════════════════════════════════════════
+# 1. 性格硬约束        30%  → Layer 4: behavior_constraint
+# 2. 过去经历因果链    25%  → Layer 5: backstory
+# 3. 决策模型          20%  → Layer 4: decision_model
+# 4. 语言特征          15%  → Layer 9: language
+# 5. 外貌身份          10%  → Layer 1-2: identity + appearance
+# ═══════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════
+# 分级定义
+# ═══════════════════════════════════════════════════════════
+# CORE    — 必填，缺则角色不可用（Identity + Behavior Constraint + Language）
+# HIGH    — 强烈推荐，缺则角色扁平（Personality + Backstory + Arc + Relationship）
+# MEDIUM  — 推荐，缺则角色缺少深度（Appearance + Ability + Thinking + Forbidden）
+# LOW     — 可选，运行时补充（Runtime State）
+# ═══════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════
+# Layer 1: 基础身份层（Identity）
+# 定义"这个人是谁"
+# ═══════════════════════════════════════════════════════════
+identity:
+  tier: CORE
+  description: "基础身份——不可无原因改变"
+  fields:
+    name:
+      type: string
+      required: true
+      description: "角色名（2-4字中文名）"
+      rules:
+        - "禁止网名感（如「风之痕」「傲世九重天」）"
+        - "支持身份升级（从底层到高层不变名）"
+        - "非模板名（避开龙傲天、叶良辰类）"
+    gender:
+      type: string
+      required: true
+      enum: ["男", "女", "无性别"]
+      description: "角色性别（显式结构字段，供代词闸/F视角检查消费）"
+      rules:
+        - "必须填写，不得省略或留空"
+        - "Writer 用于确定人称代词，Consistency checker 用于跨章校验"
+    age:
+      type: [string, number]
+      required: false
+      description: "初始年龄（可写具体数字或描述性表达如'外貌约24'）"
+    race:
+      type: string
+      required: false
+      description: "种族/身份类别（如：凡人/修士/妖族/魔族）"
+    era:
+      type: string
+      required: false
+      description: "所处时代（如：架空古代/现代/未来）"
+    occupation:
+      type: string
+      required: false
+      description: "职业/身份（如：杂货铺掌柜/钦天监博士）"
+    social_position:
+      type: string
+      required: false
+      description: "社会位置（如：从九品末等/坊市地头蛇）"
+    faction:
+      type: string
+      required: false
+      nullable: true
+      description: "所属势力（如：无/三皇子党/青禾宗）"
+    story_role:
+      type: array
+      required: true
+      description: "角色定位"
+      enum: ["主角", "配角", "反派", "功能角色"]
+    character_tags:
+      type: array
+      required: false
+      description: "角色标签（如：凡人逆袭/商业型主角/冷静谋略型）"
+  rules:
+    - "身份必须稳定，不允许无剧情原因改变核心身份"
+    - "身份变化必须进入成长记录"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 bible.json identity 字段 → 拆分为 race/occupation/social_position/faction"
+    - "原 bible.json role 字段 → story_role"
+    - "原 bible.json age 字段 → age"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 2: 外貌与外显形象层（Appearance）
+# 定义别人第一眼看到什么
+# ═══════════════════════════════════════════════════════════
+appearance:
+  tier: MEDIUM
+  description: "外貌与外显形象——不只是好看，而是记忆点"
+  fields:
+    physical:
+      type: object
+      required: false
+      description: "物理外貌"
+      properties:
+        height:
+          type: string
+          description: "身高描述"
+        body:
+          type: string
+          description: "体型描述"
+        face:
+          type: string
+          description: "面容描述"
+        clothing:
+          type: string
+          description: "常服装束"
+    impression:
+      type: object
+      required: false
+      description: "不同视角的印象"
+      properties:
+        stranger:
+          type: string
+          description: "陌生人第一印象"
+        acquaintance:
+          type: string
+          description: "熟人印象"
+        enemy:
+          type: string
+          description: "敌人印象"
+    habits:
+      type: array
+      required: false
+      description: "外显习惯动作"
+  rules:
+    - "不要只写'漂亮'，要写具体记忆点"
+    - "写法：五官清秀，不具攻击性。第一次见面容易被低估。"
+    - "habits 与 humanizing_details 可重叠但不强制"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 3: 核心人格层（Personality Core）
+# 定义角色为什么成为现在的人
+# ═══════════════════════════════════════════════════════════
+personality:
+  tier: HIGH
+  description: "核心人格——性格、价值观、情绪模式"
+  fields:
+    core_traits:
+      type: object
+      required: true
+      description: "核心性格特质"
+      properties:
+        strengths:
+          type: array
+          description: "性格优势（如：理性/坚韧/善于观察）"
+        weaknesses:
+          type: array
+          description: "性格弱点（如：不信任别人/控制欲强）"
+    personality_summary:
+      type: string
+      required: false
+      description: "一句话总结角色性格"
+    values:
+      type: object
+      required: false
+      description: "价值观体系"
+      properties:
+        believes:
+          type: array
+          description: "认为什么是正确的"
+        rejects:
+          type: array
+          description: "什么无法接受"
+        priority:
+          type: array
+          description: "价值排序（1=最高）"
+    emotion_pattern:
+      type: object
+      required: false
+      description: "情绪模式——不同情绪下的表现"
+      properties:
+        happy:
+          type: object
+          properties:
+            expression:
+              type: array
+              description: "如何表现开心"
+        angry:
+          type: object
+          properties:
+            trigger:
+              type: array
+              description: "什么会激怒他"
+            reaction:
+              type: array
+              description: "如何发怒"
+        afraid:
+          type: object
+          properties:
+            hidden_fear:
+              type: array
+              description: "最大恐惧"
+            behavior:
+              type: array
+              description: "恐惧时做什么"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 flaw 字段 → core_traits.weaknesses + personality_summary"
+    - "原 desire 字段 → values.believes + values.priority"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 4: 性格硬约束层（Behavior Constraint）
+# 防止 AI 为剧情牺牲角色——权重 30%+20%=50%
+# ═══════════════════════════════════════════════════════════
+behavior_constraint:
+  tier: CORE
+  description: "性格硬约束——最重要的部分，权重50%"
+  fields:
+    hard_constraints:
+      type: object
+      required: true
+      description: "永久规则——角色行为红线"
+      properties:
+        always:
+          type: array
+          description: "永远不会做什么（如：永远不会因为别人三言两语相信对方）"
+        never:
+          type: array
+          description: "绝对禁止行为（如：永远不会主动承认失败）"
+    decision_model:
+      type: object
+      required: false
+      description: "决策模型——遇到事情怎么选择"
+      properties:
+        danger:
+          type: object
+          properties:
+            priority:
+              type: array
+              description: "危险时的优先级排序"
+        opportunity:
+          type: object
+          properties:
+            evaluate:
+              type: array
+              description: "评估机会的维度（收益/风险/长期影响）"
+        conflict:
+          type: object
+          properties:
+            preferred_solution:
+              type: array
+              description: "偏好解决方案（谈判/交易/暗中布局）"
+  rules:
+    - "这是防止角色漂移的核心机制"
+    - "hard_constraints 必须具体，不能是抽象原则"
+    - "decision_model 定义决策优先级，不是具体答案"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 voice_anchors[taboo] → hard_constraints.never"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 5: 过去经历层（Backstory）
+# 定义行为原因——权重 25%
+# ═══════════════════════════════════════════════════════════
+backstory:
+  tier: HIGH
+  description: "过去经历——行为的因果链，权重25%"
+  fields:
+    events:
+      type: array
+      required: true
+      description: "关键经历事件"
+      item_schema:
+        type: object
+        properties:
+          time:
+            type: string
+            description: "发生时间"
+          experience:
+            type: string
+            description: "经历内容"
+          impact:
+            type: object
+            properties:
+              personality_change:
+                type: string
+                description: "对性格的影响"
+              belief_created:
+                type: array
+                description: "形成的信念"
+              fear_created:
+                type: array
+                description: "形成的恐惧"
+          future_trigger:
+            type: object
+            properties:
+              when:
+                type: string
+                description: "什么情况下触发"
+              reaction:
+                type: array
+                description: "触发后的行为反应"
+  rules:
+    - "不是写流水账，是写因果链"
+    - "格式：事件 → 心理影响 → 行为习惯 → 未来触发"
+    - "每个重要角色至少 1 个核心 backstory event"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 6: 能力系统层（Ability）
+# 防止角色万能
+# ═══════════════════════════════════════════════════════════
+ability:
+  tier: MEDIUM
+  description: "能力系统——明确能力边界"
+  fields:
+    strengths:
+      type: array
+      required: false
+      description: "擅长什么"
+    weaknesses:
+      type: array
+      required: false
+      description: "不擅长什么"
+    resources:
+      type: array
+      required: false
+      description: "拥有什么资源"
+    limitations:
+      type: array
+      required: false
+      description: "做不到什么"
+    capability_boundary:
+      type: object
+      required: false
+      description: "能力边界——可以做什么/不能做什么"
+      properties:
+        can:
+          type: array
+          description: "可以做到的事"
+        cannot:
+          type: array
+          description: "做不到的事"
+  rules:
+    - "必须包含能力边界——明确角色做不到什么"
+    - "防止角色万能化"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 abilities_resources → ability.strengths + ability.resources"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 7: 人际关系层（Relationship）
+# 定义角色之间变化
+# ═══════════════════════════════════════════════════════════
+relationship:
+  tier: HIGH
+  description: "人际关系——不是标签，是变化弧线"
+  fields:
+    target:
+      type: array
+      required: false
+      description: "与其他角色的关系"
+      item_schema:
+        type: object
+        properties:
+          name:
+            type: string
+            description: "对方角色名"
+          relationship:
+            type: array
+            description: "关系类型（朋友/敌人/合作者）"
+          trust:
+            type: number
+            description: "信任度 0-100"
+          attitude:
+            type: string
+            description: "当前态度"
+          interaction_rule:
+            type: string
+            description: "互动规则"
+          evolution:
+            type: string
+            description: "关系演变方向"
+  rules:
+    - "关系不是标签，要有变化弧线"
+    - "初始（利用）→ 中期（认可）→ 后期（信任）"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 relationship_anchor → relationship.target[0].relationship"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 8: 成长轨迹层（Character Arc）
+# 定义变化方向
+# ═══════════════════════════════════════════════════════════
+arc:
+  tier: HIGH
+  description: "成长轨迹——变化方向，不是换人格"
+  fields:
+    beginning:
+      type: object
+      required: false
+      description: "起点状态"
+      properties:
+        belief:
+          type: string
+          description: "初始信念"
+        behavior:
+          type: string
+          description: "初始行为模式"
+    middle:
+      type: object
+      required: false
+      description: "中间状态"
+      properties:
+        conflict:
+          type: string
+          description: "核心冲突"
+        change:
+          type: string
+          description: "发生的变化"
+    ending:
+      type: object
+      required: false
+      description: "终点状态"
+      properties:
+        final_state:
+          type: string
+          description: "最终状态"
+    fate_metaphor:
+      type: string
+      required: false
+      description: "命运隐喻——一句话预言结局"
+  rules:
+    - "成长不是换人格，是旧人格优势→被现实验证→形成更高层能力"
+    - "arc 回答'最终成为谁'，lifecycle 回答'当前信什么'"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 arc 字段 → arc.ending.final_state"
+    - "原 fate_metaphor → arc.fate_metaphor"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 9: 语言系统层（Language）
+# 防止所有角色AI腔——权重 15%
+# ═══════════════════════════════════════════════════════════
+language:
+  tier: CORE
+  description: "语言系统——角色声音差异化"
+  fields:
+    speech_style:
+      type: object
+      required: true
+      description: "语言总体风格"
+      properties:
+        tone:
+          type: array
+          description: "语调（如：冷静/温和/讽刺）"
+        rhythm:
+          type: array
+          description: "节奏（如：短句/慢节奏）"
+        vocabulary:
+          type: object
+          properties:
+            prefer:
+              type: array
+              description: "常用词"
+            avoid:
+              type: array
+              description: "禁止词"
+    cognitive_benchmarks:
+      type: array
+      required: true
+      description: "认知标尺与隐喻领域（用什么尺度衡量人事物、惯用意象来源）"
+    syntax_rhythm:
+      type: array
+      required: true
+      description: "句法节奏（句长分布与典型句序）"
+    pragmatic_shifts:
+      type: object
+      required: true
+      description: "语用策略与情绪变调"
+      properties:
+        relaxed:
+          type: string
+          description: "放松时的说话方式"
+        pressured:
+          type: string
+          description: "施压时的说话方式"
+        angry:
+          type: string
+          description: "动怒时的说话方式"
+        perfunctory:
+          type: string
+          description: "敷衍时的说话方式"
+    low_frequency_markers:
+      type: array
+      required: false
+      description: "低频锚点（非必用，只作情绪扳机；可为空）"
+      items:
+        type: object
+        properties:
+          marker:
+            type: string
+          enabled_states:
+            type: array
+            description: "可用状态"
+          disabled_states:
+            type: array
+            description: "禁用状态"
+          emotional_function:
+            type: string
+          usage:
+            type: string
+    verbal_habits:
+      type: object
+      required: false
+      description: "口头表达习惯（补充层，不参与达标判定）"
+      properties:
+        catchphrases:
+          type: array
+          description: "口头禅/标志性语句（可选；不设条数下限）"
+        expression_pattern:
+          type: array
+          description: "表达模式（如：先分析后判断）"
+        forbidden:
+          type: array
+          description: "不符合身份的话"
+    speech_by_relationship:
+      type: object
+      required: false
+      description: "不同对象的语言变化"
+      properties:
+        stranger:
+          type: object
+          properties:
+            tone:
+              type: string
+        friend:
+          type: object
+          properties:
+            tone:
+              type: string
+        enemy:
+          type: object
+          properties:
+            tone:
+              type: string
+        elder:
+          type: object
+          properties:
+            tone:
+              type: string
+    emotion_shifts:
+      type: object
+      required: false
+      description: "情绪语言变化"
+      properties:
+        anger:
+          type: string
+          description: "愤怒时的语言特征"
+        nervous:
+          type: string
+          description: "紧张时的语言特征"
+        lying:
+          type: string
+          description: "撒谎时的语言特征"
+  rules:
+    - "核心目标：遮住名字也能分清谁在说话"
+    - "低频锚点全书唯一，新角色与已有角色共用同一锚点即打回"
+    - "低频锚点非必用，不设条数下限；未出现不算缺陷"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 voice_anchors → language.speech_style + language.verbal_habits"
+    - "原 forbidden_patterns → language.verbal_habits.forbidden"
+    - "原 voice_profile → language 整体"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 10: 内心独白模型（Thinking）
+# 定义角色如何思考
+# ═══════════════════════════════════════════════════════════
+thinking:
+  tier: MEDIUM
+  description: "内心独白模型——角色如何思考"
+  fields:
+    default_question:
+      type: array
+      required: false
+      description: "遇到事情时的第一反应问题"
+    thinking_style:
+      type: string
+      required: false
+      description: "思考风格（数据分析型/情绪感知型/价值判断型）"
+  rules:
+    - "思考风格影响内心独白的视角和措辞"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 11: 角色禁区（Forbidden）
+# 防止AI乱写
+# ═══════════════════════════════════════════════════════════
+forbidden:
+  tier: HIGH
+  description: "角色禁区——行为/语言/剧情的硬性禁止"
+  fields:
+    behavior:
+      type: array
+      required: false
+      description: "不符合人格的行为"
+    dialogue:
+      type: array
+      required: false
+      description: "不符合身份的语言"
+    plot:
+      type: array
+      required: false
+      description: "剧情层面的禁止（强行降智/强行圣母/强行黑化）"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 forbidden_patterns → forbidden.behavior + forbidden.dialogue"
+
+# ═══════════════════════════════════════════════════════════
+# Layer 12: 动态状态层（Runtime State）
+# 每章更新，静态角色卡不要频繁修改
+# ═══════════════════════════════════════════════════════════
+runtime_state:
+  tier: LOW
+  description: "动态状态——每章更新，不修改静态角色卡"
+  fields:
+    current_goal:
+      type: string
+      required: false
+      description: "当前目标"
+    current_emotion:
+      type: string
+      required: false
+      description: "当前情绪状态"
+    current_pressure:
+      type: string
+      required: false
+      description: "当前压力来源"
+    relationships_change:
+      type: string
+      required: false
+      description: "关系变化"
+    recent_events:
+      type: array
+      required: false
+      description: "最近经历的事件"
+    unresolved_conflicts:
+      type: array
+      required: false
+      description: "未解决的冲突"
+  rules:
+    - "运行时字段，不在建卡时填写"
+    - "每章结束后由 tracking 系统更新"
+  # 向后兼容映射
+  backward_compatibility:
+    - "原 state → runtime_state.current_goal + runtime_state.current_emotion"
+    - "原 open_threads → runtime_state.unresolved_conflicts"
+    - "原 location → runtime_state（不直接映射）"
+
+# ═══════════════════════════════════════════════════════════
+# 兼容字段（保留，逐步迁移）
+# ═══════════════════════════════════════════════════════════
+legacy_fields:
+  desire:
+    mapped_to: "personality.values.believes + arc.beginning.belief"
+    note: "核心驱动力，保留用于 bible.json 向后兼容"
+  flaw:
+    mapped_to: "personality.core_traits.weaknesses + backstory.events[0].impact"
+    note: "致命弱点，保留用于 bible.json 向后兼容"
+  humanizing_details:
+    mapped_to: "appearance.habits"
+    note: "人化细节，保留用于 bible.json 向后兼容"
+  voice_anchors:
+    mapped_to: "language.speech_style + language.verbal_habits"
+    note: "台词锚点，保留用于 bible.json 向后兼容"
+  comedy_recipe:
+    mapped_to: "language.verbal_habits + personality.core_traits"
+    note: "喜剧配方，保留用于 bible.json 向后兼容"
+
+# ═══════════════════════════════════════════════════════════
+# bible.json 兼容映射
+# ═══════════════════════════════════════════════════════════
+bible_json_mapping:
+  name: "identity.name"
+  role: "identity.story_role"
+  gender: "identity.gender"
+  age: "identity.age"
+  identity: "identity.race + identity.occupation + identity.social_position + identity.faction"
+  voice: "language.speech_style"
+  anchor: "arc.beginning.belief"
+  flaw: "personality.core_traits.weaknesses[0]"
+  arc: "arc.ending.final_state"
+  fate_metaphor: "arc.fate_metaphor"
+  state: "runtime_state.current_goal"
+  break_rules: "behavior_constraint.hard_constraints"
+  lifecycle: "arc（动态阶段）"
+  voice_generation: "language.speech_style + language.verbal_habits"
+
+# ═══════════════════════════════════════════════════════════
+# 示例：沈砚（12层完整示例）
+# ═══════════════════════════════════════════════════════════
+examples:
+  - name: "沈砚"
+    # Layer 1: Identity
+    identity:
+      name: "沈砚"
+      gender: "男"
+      age: 28
+      race: "穿越者（现代灵魂+古代身体）"
+      era: "架空大曜朝"
+      occupation: "钦天监历算科从九品博士"
+      social_position: "末等小官"
+      faction: "无（被三皇子收编前）"
+      story_role: ["主角"]
+      character_tags: ["穿越者", "数据流", "低调型主角"]
+    # Layer 2: Appearance
+    appearance:
+      physical:
+        face: "五官端正，不具攻击性"
+        clothing: "钦天监低品官服，袖口磨得起毛"
+      impression:
+        stranger: "不像官员，更像账房先生"
+        acquaintance: "眼神偶尔闪过不属于这个时代的锐利"
+      habits: ["思考时指尖敲桌面", "听到数字时眼神聚焦"]
+    # Layer 3: Personality Core
+    personality:
+      core_traits:
+        strengths: ["理性", "观察力强", "数据敏感"]
+        weaknesses: ["不敢质疑权威", "数据异常时憋不住"]
+      personality_summary: "谨慎到近乎怯懦，但数据异常时会突破底线"
+      values:
+        believes: ["数字不会说谎", "程序正义有其价值"]
+        rejects: ["伪造数据", "用天意压人"]
+        priority: ["生存", "数据真实", "程序正义"]
+      emotion_pattern:
+        angry:
+          trigger: ["数据被篡改", "有人用天意压人"]
+          reaction: "表面更冷静，内心更愤怒"
+        afraid:
+          hidden_fear: ["被拆穿是数理推算", "连累他人"]
+          behavior: "退缩，先按程序上报"
+    # Layer 4: Behavior Constraint (权重50%)
+    behavior_constraint:
+      hard_constraints:
+        always:
+          - "遇到数据异常必须核实，哪怕有风险"
+          - "对外包装成夜观天象，绝不暴露统计学方法"
+        never:
+          - "永远不会因为权威压力放弃核实数据"
+          - "永远不会主动说出'统计''方差''回归'等现代词汇"
+      decision_model:
+        danger:
+          priority: ["保命", "保住秘密", "核实数据"]
+        conflict:
+          preferred_solution: ["借制度壳", "用数据说话", "暗中布局"]
+    # Layer 5: Backstory (权重25%)
+    backstory:
+      events:
+        - time: "前世"
+          experience: "复核放过一页'持平'报表，致一县饥荒"
+          impact:
+            personality_change: "对数据异常极度敏感"
+            belief_created: ["账不会骗人，骗人的是看账的人"]
+          future_trigger:
+            when: "看到类似的数据异常"
+            reaction: ["必须核实", "哪怕有风险"]
+    # Layer 6: Ability
+    ability:
+      strengths: ["统计分析", "数据模式识别", "概率推断"]
+      weaknesses: ["武力值低", "不擅社交", "体力差"]
+      resources: ["现代统计学知识", "钦天监档案"]
+      limitations: ["数据缺失时无法推算", "不能暴露真实方法"]
+      capability_boundary:
+        can: ["从数据中发现异常", "用古代包装呈现推算结果"]
+        cannot: ["直接击败高阶修士", "凭空推算无数据支撑"]
+    # Layer 7: Relationship
+    relationship:
+      target:
+        - name: "周敬亭"
+          relationship: ["对手", "压制者"]
+          trust: 10
+          attitude: "表面恭敬，内心提防"
+          evolution: "从被动应对到主动反击"
+    # Layer 8: Arc
+    arc:
+      beginning:
+        belief: "先保住小命，按程序办事"
+        behavior: "谨慎、隐忍、不敢出头"
+      middle:
+        conflict: "欺君红线与数据真实的矛盾"
+        change: "从被动应对到主动布局"
+      ending:
+        final_state: "从末等小官变成能撬动朝堂的数据操盘手"
+      fate_metaphor: "算珠的宿命：拨得动天机，拨不动人心"
+    # Layer 9: Language (权重15%)
+    language:
+      speech_style:
+        tone: ["冷静", "克制", "偶尔冷幽默"]
+        rhythm: ["短句为主", "数据先行"]
+        vocabulary:
+          prefer: ["账", "数", "核实", "照实说"]
+          avoid: ["统计", "方差", "回归", "概率"]
+      cognitive_benchmarks: ["评价人先看规矩与体面", "衡量代价先算投入产出比"]
+      syntax_rhythm: ["短句为主", "先结论后补一句理由"]
+      pragmatic_shifts:
+        relaxed: "句子松，偶尔自嘲"
+        pressured: "只给结论与时限"
+        angry: "越怒越客气，句子越短"
+        perfunctory: "只回一个字"
+      low_frequency_markers:
+        - marker: "拎不清"
+          enabled_states: ["私下吐槽", "对亲近同乡放松时"]
+          disabled_states: ["正式谈判", "当众对峙"]
+          emotional_function: "泄压"
+          usage: "单独一句收尾，不叠加其他地域词"
+      verbal_habits:
+        expression_pattern: ["先摆数据", "再下判断"]
+        forbidden: ["直接说结论不摆数据"]
+      emotion_shifts:
+        anger: "更冷静，语速更慢"
+        lying: "声音更轻，眼神避开"
+    # Layer 10: Thinking
+    thinking:
+      default_question: ["数据对得上吗", "有没有异常值"]
+      thinking_style: "数据分析型"
+    # Layer 11: Forbidden
+    forbidden:
+      behavior: ["降智", "圣母", "无脑冲动"]
+      dialogue: ["满口现代术语", "直接说结论不摆数据"]
+      plot: ["强行黑化", "无脑牺牲"]
+    # Layer 12: Runtime State (运行时填充)
+    runtime_state: {}
+
+# ═══════════════════════════════════════════════════════════
+# 校验规则
+# ═══════════════════════════════════════════════════════════
+validation:
+  # CORE 层校验（缺一不可）
+  core_check:
+    - "identity.name 必须存在且非空"
+    - "identity.gender 必须在 [男/女/无性别] 内"
+    - "identity.story_role 必须存在"
+    - "behavior_constraint.hard_constraints 必须存在"
+    - "language.speech_style 必须存在"
+    - "language.cognitive_benchmarks / syntax_rhythm / pragmatic_shifts 必须存在"
+    - "language.low_frequency_markers 可为空；非空时全书唯一"
+
+  # HIGH 层校验（强烈推荐）
+  high_check:
+    - "personality.core_traits 必须存在"
+    - "backstory.events 至少1个核心事件"
+    - "arc 必须存在"
+    - "relationship.target 至少1个重要关系"
+
+  # 语义校验
+  semantic_check:
+    - "behavior_constraint.hard_constraints.never 不能与 arc.beginning.belief 矛盾"
+    - "language.low_frequency_markers 非空时必须全书唯一"
+    - "backstory.events[0].impact 必须与 personality.core_traits 有因果关系"
+    - "arc.beginning → arc.ending 必须有可见变化"

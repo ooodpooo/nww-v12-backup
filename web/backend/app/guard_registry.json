@@ -1,0 +1,164 @@
+{
+  "module": "千章守护中心",
+  "version": "P0-readonly+runtime-probe",
+  "updated": "2026-11-05",
+  "note": "登记册的 mode 不再只靠人工声明：guard.py 加载时按 probe 校验证据源码符号与依赖开关实际值，未通过即降级 mode 并附 runtime_reason。NWW_GUARD_RUNTIME_PROBE=0 可回滚到纯静态声明。已纠偏：NRL_MODE=shadow 时 rhythm_plan 不注入 packet，L0-1 不得声明为「节奏计划已注入」。",
+  "layers": {
+    "L0": "整体生命层：决定这本书往哪里发展（方向坐标系）",
+    "L1": "跨章连续性层：决定前章结果能否真正改变后章",
+    "L2": "单章质量层：决定写到后面是否「没错但没法看」",
+    "L3": "工程稳定层：决定错误会不会静默污染后几百章"
+  },
+  "dimensions": [
+    {
+      "id": "L0-1",
+      "layer": "L0",
+      "name": "整体发展规划",
+      "prevents": "主线走丢、卷与卷重复、后期无事可写、结局收不住",
+      "stage": "建书→总纲→卷纲→滚动规划",
+      "mode": "partial",
+      "evidence": "packet_builder_v2.py thousand_chapter_guard 注入 macro_stage；writer_prompt.py 硬约束「严格遵守 macro_stage.rule」。NWW_NRL_MODE 默认 off，guard 路由导入时 setdefault 为 shadow；nww_rhythm_planner.py:386-390 明确「shadow 绝不注入 packet」，仅 enforce 才写 packet['rhythm_plan']。",
+      "packet_key": "thousand_chapter_guard.macro_stage",
+      "note": "macro_stage 已进 packet 且 writer 侧硬约束；节奏计划（NRL）在 shadow 模式下不注入，整章节奏仍靠模型自觉，故本维度标「已接线·不全」。",
+      "probe": {
+        "symbols": [{"file": "skills/nww-novel-skill/scripts/nww_packet_builder_v2.py", "text": "thousand_chapter_guard"}],
+        "env": [{"key": "NWW_NRL_MODE", "enabled": ["enforce"], "default": "off", "degrade": "partial"}]
+      }
+    },
+    {
+      "id": "L0-2",
+      "layer": "L0",
+      "name": "节奏与章节职能",
+      "prevents": "连续平章、连续高潮、升级过快、情绪疲劳、卷尾无力",
+      "stage": "卷纲→章节合同→细纲→prealign→卷末复盘",
+      "mode": "active",
+      "evidence": "packet_builder_v2.py narrative_arc_band；writer_prompt.py 硬约束「本章叙事重心须贴合 band_type」",
+      "packet_key": "thousand_chapter_guard.narrative_arc_band",
+      "note": "叙事重心带已派生进 packet 并在 writer_prompt 硬约束。提交前硬约束已生效。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_packet_builder_v2.py", "text": "narrative_arc_band"}]}
+    },
+    {
+      "id": "L1-1",
+      "layer": "L1",
+      "name": "世界观与 Canon",
+      "prevents": "设定互相冲突、规则随剧情临时改变、禁令失效",
+      "stage": "设定库→packet→Writer→一致性检查→commit",
+      "mode": "active",
+      "evidence": "nww_content_gates 写前 exit 2；verify_consistency_closure A-3 commit 硬闸；verify_timeline_id_conflict A-7 硬闸",
+      "packet_key": "bible / global / position",
+      "note": "内容存在性门 + 一致性闭环 + timeline id 冲突均为提交前硬闸。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_consistency_closure"}]}
+    },
+    {
+      "id": "L1-2",
+      "layer": "L1",
+      "name": "人物状态与关系",
+      "prevents": "人物失忆、伤势复原、位置乱跳、关系复位、声纹漂移、性别/代词错误",
+      "stage": "角色卡/状态→packet→Writer→delta→人物审查→状态提交",
+      "mode": "active",
+      "evidence": "pronoun_gate 对 write/rewrite 新稿 BLOCK；character_depth 角色卡原文注入；verify_consistency_closure commit 硬闸",
+      "packet_key": "character_contract / pronoun_gate / character_depth",
+      "note": "代词性别机械闸对新稿阻断；角色卡原文已注入 character_depth。",
+      "probe": {"symbols": [{"file": "web/backend/app/agents_runtime/pipeline.py", "text": "def _pronoun_gate_check"}]}
+    },
+    {
+      "id": "L1-3",
+      "layer": "L1",
+      "name": "时间线与因果链",
+      "prevents": "时间倒流、时长错误、事件撞号、结果无原因、前章事件后章失效",
+      "stage": "细纲→事件注册表→delta→时间线/因果审查",
+      "mode": "active",
+      "evidence": "verify_timeline_id_conflict A-7 commit 硬闸（append 模式 id 交集→BLOCK）；as_of 历史时点冻结已修",
+      "packet_key": "thousand_chapter_guard.as_of_chapter",
+      "note": "timeline id 冲突为 commit 硬闸；as_of 冻结已修。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_timeline_id_conflict"}]}
+    },
+    {
+      "id": "L1-4",
+      "layer": "L1",
+      "name": "数值、资源与道具",
+      "prevents": "境界倒退、货币凭空增减、代价不算、物品归属/损耗混乱",
+      "stage": "数值锚/资源账→packet→delta→A1/A6 等闸门→commit",
+      "mode": "active",
+      "evidence": "_run_settlement_anchor_guard A-6 commit 硬闸（有 block 即 raise）；verify_meter_consistency A-1 硬闸",
+      "packet_key": "thousand_chapter_guard.resource_ledger",
+      "note": "结算互锚 + 代价计数一致性均为 commit 硬闸。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "_run_settlement_anchor_guard"}]}
+    },
+    {
+      "id": "L1-5",
+      "layer": "L1",
+      "name": "伏笔、承诺与信息释放",
+      "prevents": "埋了不接、反复提醒不推进、提前泄底、承诺逾期、认知混乱",
+      "stage": "规划→伏笔台账→packet→Writer→review→提交后治理",
+      "mode": "active",
+      "evidence": "verify_foreshadow_overdue A-9 commit 硬闸（2026-11-05 新增，门控已改为读 project 的 policy）；verify_fact_provenance commit 硬闸",
+      "packet_key": "thousand_chapter_guard.map_foreshadow",
+      "note": "伏笔逾期回收已前移为 commit 硬闸；A-9 读错 cwd 导致闸不可关的问题已修复。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_foreshadow_overdue"}]}
+    },
+    {
+      "id": "L1-6",
+      "layer": "L1",
+      "name": "章间衔接与重复",
+      "prevents": "章首重置、章尾复读、同场景换词重演、跨章复读、前章结尾无后续",
+      "stage": "前情/跨章状态→packet→Writer→去重→跨章检查",
+      "mode": "active",
+      "evidence": "verify_cross_chapter_repeats A-8 commit 硬闸：跨章 6 字 ngram 重复≥3、段落密度漂移、标题疲劳→BLOCK；wordcount 70% 硬校验；paragraph_gate",
+      "packet_key": null,
+      "note": "跨章复读检测已从 advisory 前移为 commit 前硬闸；守护面板的章节数上限 300 已移除。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_cross_chapter_repeats"}]}
+    },
+    {
+      "id": "L2-1",
+      "layer": "L2",
+      "name": "细纲兑现与章节完成度",
+      "prevents": "细纲写了正文没写、关键结果缺失、章节变薄、只凑字数",
+      "stage": "细纲/prealign→Writer→review→字数/段落闸",
+      "mode": "active",
+      "evidence": "verify_post_write_meta A-5 commit 硬闸（enforced/reviewed 缺失→BLOCK）；wordcount 70% 硬校验线；P0-1 sidecar 合同结构化落盘",
+      "packet_key": "outline / contract sidecar",
+      "note": "流程完整性 A-5 + 字数硬校验 + sidecar 合同均为提交前硬闸。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_post_write_meta"}]}
+    },
+    {
+      "id": "L2-2",
+      "layer": "L2",
+      "name": "正文质感与风格稳定",
+      "prevents": "电报体、堆砌、AI 腔、机械句、声纹趋同、长篇后文风退化",
+      "stage": "文风资产→Writer→deslop/enforce→review→paragraph gate",
+      "mode": "active",
+      "evidence": "run_phase45_gate A-2 硬质量门（2026-11-05 起 a2_mode=on 时执行侧自动定位 quality/ 真跑，配置缺失 fail-closed）；deslop/enforce；paragraph_gate；style_anchor 受 NWW_STYLE_ANCHOR 控制",
+      "packet_key": "style_anchor / 文风.md",
+      "note": "A-2 已接实；style_anchor 默认关闭，风格锚未进 packet，故本维度会被运行时探针降级为「已接线·不全」。",
+      "probe": {
+        "symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def run_phase45_gate"}],
+        "env": [{"key": "NWW_STYLE_ANCHOR", "enabled": ["1"], "default": "0", "degrade": "partial"}]
+      }
+    },
+    {
+      "id": "L3-1",
+      "layer": "L3",
+      "name": "权威状态、事务与重写安全",
+      "prevents": "正文和状态不一致、视图过期、重复提交、并发覆盖、重写污染未来章",
+      "stage": "快照→版本校验→commit→渲染视图→回滚/重写",
+      "mode": "active",
+      "evidence": "verify_delta_consistency A-4 commit 硬闸；verify_post_write_meta A-5；事务锁 _apply_transaction_locked；global_change 已在 _DELTA_ALLOWED 并正确 merge",
+      "packet_key": null,
+      "note": "delta 审计 + 流程完整性 + 事务锁 + 版本校验均为 commit 硬闸。",
+      "probe": {"symbols": [{"file": "skills/nww-novel-skill/scripts/nww_track_commit.py", "text": "def verify_delta_consistency"}]}
+    },
+    {
+      "id": "L3-2",
+      "layer": "L3",
+      "name": "执行容错与长期验证",
+      "prevents": "空稿/截断仍入库、检测失败被当通过、任务卡死、错误长期积累",
+      "stage": "全流程→重试/超时/错误分类→滚动审计→整本压力验证",
+      "mode": "active",
+      "evidence": "agent_tasks 落盘+TTL+重启恢复；_append_live_stage 步骤时间线；僵尸任务检测；错误分类与重试预算；fail_closed=true 缺闸按阻断",
+      "packet_key": null,
+      "note": "执行容错链完整；千章级端到端压测与故障注入仍属待验收项（见审查报告 P2）。",
+      "probe": {"symbols": [{"file": "web/backend/app/nwwmvp.py", "text": "def _append_live_stage"}]}
+    }
+  ]
+}

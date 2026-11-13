@@ -1,0 +1,15 @@
+{
+  "workflow": "analyze",
+  "version": 1,
+  "description": "机器执行契约（仅声明阶段顺序/依赖/执行器/产物，不承载方法论或 Prompt）",
+  "mode": "sequential",
+  "steps": [
+    { "id": "stage0", "requires": [], "executor": {"type":"agent","agent":"nww-architect","session":"章节边界提取与概要落盘"}, "inputs": ["raw_text"], "outputs": ["_progress.md","概要.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage1", "requires": ["stage0"], "executor": {"type":"agent","agent":"nww-architect","session":"黄金三章深度拆解与快速预览"}, "inputs": ["_progress.md"], "outputs": ["章节/第1-3章_深度拆解.md","快速预览.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage2", "requires": ["stage1"], "executor": {"type":"agent","agent":"nww-chapter-extractor","session":"逐章摘要提取"}, "inputs": ["_progress.md"], "outputs": ["章节/第{N}章_摘要.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage3", "requires": ["stage2"], "executor": {"type":"agent","agent":"nww-architect","session":"聚合分析（剧情/节奏/情绪模块/角色合并）"}, "inputs": ["stage2 全部摘要"], "outputs": ["剧情/README.md","剧情/节奏.md","剧情/情绪模块.md","剧情/故事线.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage4", "requires": ["stage2","stage3"], "executor": {"type":"agent","agent":"nww-character-designer","session":"设定与角色关系提取"}, "inputs": ["stage2 情节点","stage3 角色合并"], "outputs": ["设定/","角色/","角色关系.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage5", "requires": ["stage3","stage4"], "executor": {"type":"agent","agent":"nww-architect","session":"汇总拆文报告"}, "inputs": ["stage3+stage4 输出"], "outputs": ["拆文报告.md"], "retry": true, "validate": "output_exists" },
+    { "id": "stage6", "requires": ["stage5"], "executor": {"type":"agent","agent":"nww-explorer","session":"文风采样"}, "inputs": ["拆文报告.md","第1-3章深度拆解.md","全部摘要","原文"], "outputs": ["文风.md"], "retry": true, "validate": "output_exists" }
+  ]
+}

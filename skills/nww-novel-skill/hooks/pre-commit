@@ -1,0 +1,73 @@
+#!/bin/bash
+# pre-commit — NWW 项目 git commit 兜底闸（2026-09-06，post_write 封装配套）
+#
+# 作用：在 git commit 时自动跑 nww_track_commit.py check，确保追踪状态一致性。
+# 这是规避"宿主 LLM 选择性执行"的最后一道兜底——即使 LLM 跳过了 post_write 封装，
+# 只要它把正文文件 commit 进 git，本 hook 就会自动跑 check，不通过则拒绝 commit。
+#
+# 安装：由 skills/setup 自动复制到 {BOOK}/.git/hooks/pre-commit；
+#       手动安装：cp hooks/pre-commit {BOOK}/.git/hooks/ && chmod +x {BOOK}/.git/hooks/pre-commit
+#
+# 设计原则：
+# - fail-open：脚本不可用 / 非 NWW 项目 / check 异常 → 不阻断（exit 0），避免 hook 损坏导致无法 commit
+# - 只对 NWW 项目生效：检测到 追踪/_tracking-state.json + bible.json 才跑 check
+# - 只读：check 不修改任何文件，只验证一致性
+# - 与 A-1/A-2/A-3/A-4/A-5 闸门互补：那些是 commit 追踪状态时的闸，这个是 git commit 文件时的闸
+
+set -uo pipefail
+
+# 定位 git 仓库根
+GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -z "$GIT_ROOT" ]; then
+  exit 0  # 非 git 仓库，不阻断
+fi
+
+# 检测是否 NWW 项目（追踪状态 + bible.json 同时存在）
+if [ ! -f "$GIT_ROOT/追踪/_tracking-state.json" ] || [ ! -f "$GIT_ROOT/bible.json" ]; then
+  exit 0  # 非 NWW 项目，静默放行
+fi
+
+# 定位 nww_track_commit.py
+# 优先级：项目内 skills/nww-novel-skill/scripts/ → 环境变量 NWW_SKILL_DIR → 全局安装
+SCRIPT=""
+if [ -f "$GIT_ROOT/skills/nww-novel-skill/scripts/nww_track_commit.py" ]; then
+  SCRIPT="$GIT_ROOT/skills/nww-novel-skill/scripts/nww_track_commit.py"
+elif [ -n "${NWW_SKILL_DIR:-}" ] && [ -f "$NWW_SKILL_DIR/scripts/nww_track_commit.py" ]; then
+  SCRIPT="$NWW_SKILL_DIR/scripts/nww_track_commit.py"
+fi
+
+if [ -z "$SCRIPT" ]; then
+  # 脚本不可用 → fail-open，不阻断
+  echo "[NWW pre-commit] NOTE: nww_track_commit.py not found, skipping consistency check (fail-open)" >&2
+  exit 0
+fi
+
+# 定位 python
+PYTHON="${PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo "[NWW pre-commit] NOTE: python3 not found, skipping consistency check (fail-open)" >&2
+  exit 0
+fi
+
+# 跑 check（只读，不修改任何文件）
+# check 的 exit code：0=通过，非0=失败
+CHECK_OUTPUT=$("$PYTHON" "$SCRIPT" check --project "$GIT_ROOT" 2>&1)
+CHECK_EXIT=$?
+
+if [ $CHECK_EXIT -eq 0 ]; then
+  # check 通过，不输出（保持静默，不干扰正常 commit）
+  exit 0
+fi
+
+# check 失败 → 拒绝 commit
+echo "" >&2
+echo "========================================" >&2
+echo "[NWW pre-commit] BLOCK: 追踪状态一致性检查未通过" >&2
+echo "========================================" >&2
+echo "" >&2
+echo "$CHECK_OUTPUT" >&2
+echo "" >&2
+echo "拒绝 commit。请修复上述一致性问题后重新 commit。" >&2
+echo "如确认本次 commit 不涉及追踪状态变更，可使用 git commit --no-verify 跳过本检查。" >&2
+echo "========================================" >&2
+exit 1

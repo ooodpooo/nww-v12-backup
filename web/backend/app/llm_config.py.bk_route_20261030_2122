@@ -1,0 +1,518 @@
+"""模型聚合中心配置模块（2026-09-11 新增，纯增量，零耦合）。
+
+职责：
+  - 集中管理接入供应商（OpenAI 兼容服务）/ 模型池 / 全局默认模型 / agent 定制路由
+  - 配置持久化到 web/backend/app/model_config.json
+  - 配置文件不存在 = 未启用模型中心：各消费模块保持原有环境变量行为完全不变
+  - API Key 读写全程掩码（sk-****abcd），不向客户端返回明文
+
+消费方（统一走本模块解析端点，优先级：配置文件 > 环境变量 > 内置默认）：
+  - nwwmvp.py   直连写章端点（default 池模型）
+  - agent.py    建书助手端点（default 池模型）
+  - runtime.py  Agent 路由（agent_routes[name] → default 池模型）
+  - llm_client.py 保持每次读环境变量不变（上层已按本模块解析后传参）
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import Optional
+from urllib.parse import urlparse
+
+import httpx
+from fastapi import APIRouter, Depends, HTTPException
+
+from .auth import get_current_user
+
+_CONFIG_PATH_LEGACY = Path(__file__).resolve().parent / "model_config.json"
+
+
+def _config_path() -> Path:
+    """配置文件路径：优先 NWW_MODEL_CONFIG_FILE 环境变量，否则 runtime/config/ 工作区。
+
+    旧路径（web/backend/app/model_config.json）存在且新路径不存在时自动迁移一次，
+    保证既有部署零感知；迁移失败则继续读旧路径兜底。
+    """
+    env = os.environ.get("NWW_MODEL_CONFIG_FILE", "").strip()
+    if env:
+        return Path(env)
+    new_path = Path(__file__).resolve().parents[3] / "runtime" / "config" / "model_config.json"
+    if not new_path.is_file() and _CONFIG_PATH_LEGACY.is_file():
+        try:
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            new_path.write_text(_CONFIG_PATH_LEGACY.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:
+            return _CONFIG_PATH_LEGACY
+    return new_path if new_path.is_file() else _CONFIG_PATH_LEGACY
+
+
+def _write(cfg: dict) -> None:
+    """原子写配置：先写同目录 .tmp 再 os.replace，避免写入中断导致文件损坏。"""
+    path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+_TIMEOUT_S = 15
+
+# Chrome 网页版桥接（openai-webui-api，OpenAI 兼容代理）在 /models 响应里的身份标记。
+# 为什么需要特判（2026-10-23 审计 F3）：桥接的 /models 是即时返回的静态清单，
+# 但 chat/completions 探活要真实驱动网页生成——实测首字 26~235s，远超这里 15s 的
+# 测试预算，通用探活必然超时 ⇒ UI 把健康的桥接供应商标红（误报）。
+# 判定策略：**只信 /models 的 owned_by 标记**（拿不到就不判），不按端口写死。
+_BRIDGE_OWNED_BY = "webui-via-chrome-bridge"
+
+
+def _is_local_host(url: str) -> bool:
+    """本地回环地址（127.*/localhost/::1）判定：直连不走环境代理，避免被 http_proxy 劫持。
+
+    远程地址保持默认行为（trust_env=True，继续走环境代理访问外网）。
+    与 llm_client 同规则独立实现，保持模块零耦合。
+    """
+    host = (urlparse(url).hostname or "").lower()
+    return host in ("localhost", "::1") or host.startswith("127.")
+
+
+def _is_chrome_vip(base_url: str) -> bool:
+    """Chrome 网页版 VIP 桥接端点判定（chrome:// 前缀即命中，与 chrome_bridge 同规则）。
+
+    这类端点不是 HTTP 服务，真实调用走 CDP 操控本机 Chrome（llm_client 特殊分发），
+    绝不能拿 httpx 去探 /models —— 协议都不认识，必然误报不可用。
+    """
+    return (base_url or "").startswith("chrome://")
+
+
+def _check_chrome_vip(base_url: str) -> dict:
+    """chrome:// 端点健康探测：探 CDP /json/version（真实调用链的前置条件）。
+
+    端口优先从 base_url 解析（chrome://localhost:9222），缺失回退
+    NWW_CHROME_CDP_PORT 环境变量（与 chrome_bridge.py 同默认 9222）。
+    CDP 活着 = 桥接可用（登录态/站点可用性由真实调用自身的重发链兜底，
+    健康检查不做深层探测，保持轻量、只读、零副作用）。
+    """
+    parsed = urlparse(base_url)
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if not port:
+        port = int(os.environ.get("NWW_CHROME_CDP_PORT", "9222") or "9222")
+    try:
+        resp = httpx.get(f"http://127.0.0.1:{port}/json/version", timeout=5, trust_env=False)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"CDP {port} 端口无响应（Chrome 调试实例未启动？）: {exc}"}
+    if resp.status_code != 200:
+        return {"ok": False, "detail": f"CDP 探测失败 HTTP {resp.status_code}"}
+    try:
+        ver = (resp.json() or {}).get("Browser", "")
+    except Exception:  # noqa: BLE001
+        ver = ""
+    return {"ok": True, "detail": f"Chrome 桥接可用{f'（{ver}）' if ver else ''}"}
+
+
+
+router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# 核心读取 / 解析
+# ---------------------------------------------------------------------------
+def _read() -> Optional[dict]:
+    """读取配置文件；不存在 / 损坏 → None（表示未启用模型中心）。"""
+    path = _config_path()
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def is_configured() -> bool:
+    """模型中心是否已启用（配置文件存在且模型池非空）。"""
+    cfg = _read()
+    return bool(cfg and cfg.get("pool"))
+
+
+def _provider_map(cfg: dict) -> dict:
+    return {p.get("id", ""): p for p in cfg.get("providers", []) if isinstance(p, dict)}
+
+
+def _pool_map(cfg: dict) -> dict:
+    return {m.get("id", ""): m for m in cfg.get("pool", []) if isinstance(m, dict)}
+
+
+def _endpoint_from_pool(cfg: dict, pool_id: str) -> Optional[tuple]:
+    """按池模型 id 解析 (base_url, model, api_key)；池模型/供应商缺失或禁用 → None。"""
+    if not cfg or not pool_id:
+        return None
+    pool = _pool_map(cfg).get(pool_id)
+    if not pool:
+        return None
+    prov = _provider_map(cfg).get(pool.get("provider", ""))
+    if not prov or prov.get("enabled", True) is False:
+        return None
+    base = str(prov.get("base_url") or "").rstrip("/")
+    if not base or not str(pool.get("model") or "").strip():
+        return None
+    return base, str(pool.get("model") or "").strip(), str(prov.get("api_key") or "")
+
+
+def pool_model_endpoint(pool_id: str) -> Optional[tuple]:
+    """按池模型 id 解析 (base_url, model, api_key)；池模型/供应商缺失或禁用 → None。"""
+    return _endpoint_from_pool(_read(), pool_id)
+
+
+def agent_endpoint(agent_name: str = "") -> Optional[tuple]:
+    """按 agent 名解析端点：agent_routes[name] → 全局 default → None（未启用）。"""
+    cfg = _read()
+    if not cfg:
+        return None
+    routes = cfg.get("agent_routes", {}) or {}
+    pool_id = routes.get(agent_name) or cfg.get("default") or ""
+    return pool_model_endpoint(pool_id)
+
+
+def default_endpoint() -> Optional[tuple]:
+    """全局默认模型端点（未启用 → None）。"""
+    cfg = _read()
+    if not cfg:
+        return None
+    return _endpoint_from_pool(cfg, cfg.get("default") or "")
+
+
+def _chain_pool_ids(cfg: dict, pool_id: str) -> list[str]:
+    """主池模型 + 其一维 fallback_pool_ids 展开成链（去环、过滤缺失/禁用供应商）。
+
+    每个池模型可配 fallback_pool_ids（数组，UI 单选项链式传参）；仅取第一个有效后继，
+    保证收敛（不无限递归）。
+    """
+    ids: list[str] = []
+    cur = pool_id
+    seen: set[str] = set()
+    while cur and cur not in seen:
+        seen.add(cur)
+        m = _pool_map(cfg).get(cur)
+        if not m:
+            break
+        prov = _provider_map(cfg).get(str(m.get("provider") or ""))
+        if not prov or prov.get("enabled", True) is False:
+            break
+        base = str(prov.get("base_url") or "").rstrip("/")
+        if not base or not str(m.get("model") or "").strip():
+            break
+        ids.append(cur)
+        fbs = m.get("fallback_pool_ids")
+        cur = None
+        if isinstance(fbs, list):
+            for f in fbs:
+                if isinstance(f, str) and f and f not in seen:
+                    cur = f
+                    break
+    return ids
+
+
+def endpoint_chain(agent_name: str = "", *, default: bool = False) -> list[tuple]:
+    """端点链（(base_url, model, api_key) 列表，主端点在前、fallbacks 在后）；未启用 → []。
+
+    - default=False：主端点 = agent_routes[agent_name] → 全局 default（agent 会话用）
+    - default=True：主端点 = 全局 default（直连写章等无 agent 名的消费方用）
+
+    2026-10-25 兜底：agent 专属路由的链（含其 fallback_pool_ids）之后**追加全局默认链**
+    （按端点三元组去重）。此前 agent 路由到单端点（如桥接模型 webui-chrome-gemini）
+    且未配 fallbacks 时链长为 1——端点 502 后整条写作链原地等死，重试只是再撞同一端点
+    （实测 rewrite 在 prealign 502×2 后直接失败）。加全局兜底后自动降级到默认模型继续。
+    """
+    cfg = _read()
+    if not cfg:
+        return []
+    if default:
+        pool_id = cfg.get("default") or ""
+    else:
+        routes = cfg.get("agent_routes", {}) or {}
+        pool_id = routes.get(agent_name) or cfg.get("default") or ""
+    out: list[tuple] = []
+    for pid in _chain_pool_ids(cfg, pool_id):
+        ep = _endpoint_from_pool(cfg, pid)
+        if ep:
+            out.append(ep)
+    if not default:
+        for pid in _chain_pool_ids(cfg, cfg.get("default") or ""):
+            ep = _endpoint_from_pool(cfg, pid)
+            if ep and ep not in out:
+                out.append(ep)
+    return out
+
+
+def agent_endpoint_chain(agent_name: str = "") -> list[tuple]:
+    """agent 会话端点链（agent_routes[name] → 全局 default + fallbacks）。"""
+    return endpoint_chain(agent_name)
+
+
+def default_endpoint_chain() -> list[tuple]:
+    """直连写章等无 agent 名的消费方端点链（全局 default + fallbacks）。"""
+    return endpoint_chain("", default=True)
+
+
+# ---------------------------------------------------------------------------
+# 掩码 / 保存
+# ---------------------------------------------------------------------------
+def mask_key(key: str) -> str:
+    """API Key 掩码：sk-****abcd；过短只保留首尾 2 位。"""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return f"{key[:2]}****{key[-2:]}"
+    return f"{key[:3]}****{key[-4:]}"
+
+
+def _is_masked(val: str) -> bool:
+    return "****" in val
+
+
+def _resolve_test_key(base_url: str, api_key: str) -> str:
+    """测试/发现用的 Key：前端回显的是掩码（未修改时），从配置按 base_url 还原真实值。"""
+    if not _is_masked(api_key):
+        return api_key
+    cfg = _read() or {}
+    target = base_url.rstrip("/")
+    for p in cfg.get("providers", []):
+        if isinstance(p, dict) and str(p.get("base_url") or "").rstrip("/") == target:
+            return str(p.get("api_key") or "")
+    return api_key
+
+
+def public_view() -> dict:
+    """掩码后的配置视图（前端读取用）。"""
+    cfg = _read()
+    if not cfg:
+        return {"configured": False, "providers": [], "pool": [], "default": "", "agent_routes": {}}
+    providers = [
+        {**p, "api_key": mask_key(p.get("api_key", ""))}
+        for p in cfg.get("providers", []) if isinstance(p, dict)
+    ]
+    return {
+        "configured": is_configured(),
+        "providers": providers,
+        "pool": [m for m in cfg.get("pool", []) if isinstance(m, dict)],
+        "default": cfg.get("default", ""),
+        "agent_routes": cfg.get("agent_routes", {}),
+    }
+
+
+def save_config(data: dict) -> dict:
+    """写配置：api_key 为掩码值 → 保留原值；返回掩码后的最新视图。"""
+    old = _read() or {}
+    old_providers = {p.get("id", ""): p for p in old.get("providers", []) if isinstance(p, dict)}
+    providers: list[dict] = []
+    for p in data.get("providers", []):
+        if not isinstance(p, dict):
+            continue
+        pid = str(p.get("id") or "").strip()
+        if not pid:
+            continue
+        key = str(p.get("api_key") or "")
+        if _is_masked(key) and pid in old_providers:
+            key = str(old_providers[pid].get("api_key") or "")
+        providers.append(
+            {
+                "id": pid,
+                "base_url": str(p.get("base_url") or "").rstrip("/"),
+                "api_key": key,
+                "enabled": bool(p.get("enabled", True)),
+            }
+        )
+    pool: list[dict] = []
+    seen_pool: set[str] = set()
+    for m in data.get("pool", []):
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "").strip()
+        if not mid or mid in seen_pool:
+            continue
+        seen_pool.add(mid)
+        fb = m.get("fallback_pool_ids")
+        pool.append(
+            {
+                "id": mid,
+                "provider": str(m.get("provider") or "").strip(),
+                "model": str(m.get("model") or "").strip(),
+                "label": str(m.get("label") or "").strip(),
+                "fallback_pool_ids": [str(f) for f in fb if isinstance(f, str)] if isinstance(fb, list) else [],
+            }
+        )
+    cfg = {
+        "providers": providers,
+        "pool": pool,
+        "default": str(data.get("default") or "").strip(),
+        "agent_routes": {str(k): str(v) for k, v in (data.get("agent_routes") or {}).items()},
+    }
+    _write(cfg)
+    return public_view()
+
+
+# ---------------------------------------------------------------------------
+# 连接测试 / 模型发现（OpenAI 兼容：GET /models + chat/completions 最小请求）
+# ---------------------------------------------------------------------------
+def test_connection(base_url: str, api_key: str, model: str = "") -> dict:
+    """验证供应商连通性；传了 model 时额外发最小补全验证该模型可实际调用。
+
+    先拉 GET /models 获取模型清单（供一键导入）；传了 model 时无论 GET 是否成功，
+    都再发一次最小补全请求确认该模型可用（GET 成功不代表可调用，如 opencode 免费层）。
+    失败原因尽量透出（HTTP 状态码 + 响应体前 200 字符），避免吞成模糊提示。
+
+    chrome:// 端点（Chrome VIP 桥接）短接为 CDP 探测：无 /models 可拉、
+    无 HTTP chat 可发，走 httpx 必然误报。
+    """
+    base = base_url.rstrip("/")
+    if _is_chrome_vip(base):
+        return _check_chrome_vip(base)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    get_err = ""
+    discovered: list[str] = []
+    is_bridge = False
+    try:
+        resp = httpx.get(f"{base}/models", headers=headers, timeout=_TIMEOUT_S, trust_env=not _is_local_host(base))
+        if resp.status_code == 200:
+            data = resp.json()
+            discovered = [m.get("id", m.get("name", "")) for m in data.get("data", []) if isinstance(m, dict)]
+            is_bridge = any(
+                isinstance(m, dict) and m.get("owned_by") == _BRIDGE_OWNED_BY
+                for m in data.get("data", [])
+            )
+        else:
+            get_err = f"HTTP {resp.status_code}: {resp.text[:200]}"
+    except Exception as exc:  # noqa: BLE001
+        get_err = str(exc)
+    # 桥接端点：/models 通了就算可用。网页生成的真实延迟（26~235s）超出测试预算，
+    # 补发 chat/completions 只会必然超时误报；站点可用性由真实调用自身的错误透出。
+    if is_bridge:
+        if not discovered:
+            return {"ok": False, "detail": get_err or "桥接 /models 未返回模型清单"}
+        return {"ok": True, "models": discovered,
+                "detail": "桥接端点（/models 即通；未发补全探活，网页生成延迟超出测试预算）"}
+    if not model:
+        if discovered:
+            return {"ok": True, "models": discovered}
+        return {"ok": False, "detail": get_err or "无法获取模型列表，请手动添加模型或检查地址/Key"}
+    try:
+        resp = httpx.post(
+            f"{base}/chat/completions",
+            headers=headers,
+            json={"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            timeout=_TIMEOUT_S,
+            trust_env=not _is_local_host(base),
+        )
+        if resp.status_code == 200:
+            return {"ok": True, "models": discovered or [model]}
+        return {"ok": False, "detail": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": str(exc)}
+
+
+def validate_pool_models(cfg: Optional[dict] = None) -> dict:
+    """池内全部模型可用性验证：每个池模型发最小补全请求。
+
+    返回 {pool_id: {"ok": bool, "detail": str}}；池空返回 {}。
+    仅用于模型中心展示（红色提示/下拉禁用），不影响任何调用链路。
+    """
+    cfg = cfg if cfg is not None else _read()
+    if not cfg:
+        return {}
+    out: dict = {}
+    for m in cfg.get("pool", []):
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "").strip()
+        if not mid:
+            continue
+        prov = _provider_map(cfg).get(str(m.get("provider") or ""))
+        if not prov or prov.get("enabled", True) is False:
+            out[mid] = {"ok": False, "detail": "供应商缺失或已禁用"}
+            continue
+        base = str(prov.get("base_url") or "").rstrip("/")
+        model = str(m.get("model") or "").strip()
+        if not base or not model:
+            out[mid] = {"ok": False, "detail": "base_url 或 model 为空"}
+            continue
+        res = test_connection(base, str(prov.get("api_key") or ""), model)
+        if res.get("ok"):
+            out[mid] = {"ok": True, "detail": "可用"}
+        else:
+            out[mid] = {"ok": False, "detail": str(res.get("detail") or "调用失败")}
+    return out
+
+
+def discover_models(base_url: str, api_key: str) -> dict:
+    """调供应商 GET /models 拉取模型清单（供前端一键导入模型池）。
+
+    chrome:// 端点无模型清单可拉（模型名是池配置自定义的），返回 CDP
+    健康状态替代误报。
+    """
+    base = base_url.rstrip("/")
+    if _is_chrome_vip(base):
+        return _check_chrome_vip(base)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        resp = httpx.get(f"{base}/models", headers=headers, timeout=_TIMEOUT_S, trust_env=not _is_local_host(base))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": str(exc)}
+    if resp.status_code != 200:
+        return {"ok": False, "detail": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+    try:
+        data = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"响应解析失败: {exc}"}
+    models = [m.get("id", m.get("name", "")) for m in data.get("data", []) if isinstance(m, dict)]
+    return {"ok": True, "models": models}
+
+
+# ---------------------------------------------------------------------------
+# HTTP 接口（NWW_MODEL_CONFIG_ENABLED=1 时由 main.py 挂载，走 /api/* 鉴权）
+# ---------------------------------------------------------------------------
+@router.get("/models/config")
+def api_models_config(user=Depends(get_current_user)) -> dict:
+    """读取模型中心配置（API Key 掩码）。"""
+    return public_view()
+
+
+@router.put("/models/config")
+def api_models_save(payload: dict, user=Depends(get_current_user)) -> dict:
+    """保存模型中心配置。body: {providers, pool, default, agent_routes}"""
+    try:
+        return save_config(payload)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"配置写入失败: {exc}") from exc
+
+
+@router.post("/models/test")
+def api_models_test(payload: dict, user=Depends(get_current_user)) -> dict:
+    """供应商连通性测试。body: {base_url, api_key?, model?}"""
+    base_url = str(payload.get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url 不能为空")
+    api_key = _resolve_test_key(base_url, str(payload.get("api_key") or ""))
+    return test_connection(base_url, api_key, str(payload.get("model") or ""))
+
+
+@router.post("/models/validate-pool")
+def api_models_validate_pool(user=Depends(get_current_user)) -> dict:
+    """池内全部模型可用性验证（红色提示/下拉禁用依据；不影响调用链路）。"""
+    return validate_pool_models()
+
+
+@router.post("/models/discover")
+def api_models_discover(payload: dict, user=Depends(get_current_user)) -> dict:
+    """拉取供应商模型清单（一键导入模型池）。body: {base_url, api_key?}"""
+    base_url = str(payload.get("base_url") or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url 不能为空")
+    api_key = _resolve_test_key(base_url, str(payload.get("api_key") or ""))
+    return discover_models(base_url, api_key)

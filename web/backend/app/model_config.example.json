@@ -1,0 +1,44 @@
+{
+  "providers": [
+    {
+      "id": "omlx",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "api_key": "",
+      "enabled": true
+    },
+    {
+      "id": "opencode zen",
+      "base_url": "https://opencode.ai/zen/v1",
+      "api_key": "",
+      "enabled": true
+    }
+  ],
+  "pool": [
+    {
+      "id": "omlx:Qwen3.6-35B-A3B-OptiQ-4bit",
+      "provider": "omlx",
+      "model": "Qwen3.6-35B-A3B-OptiQ-4bit",
+      "label": ""
+    },
+    {
+      "id": "omlx:Qwen3.8-27B-oQ4e-fp16-mtp",
+      "provider": "omlx",
+      "model": "Qwen3.8-27B-oQ4e-fp16-mtp",
+      "label": ""
+    },
+    {
+      "id": "opencode_zen:deepseek-v4-flash-free",
+      "provider": "opencode zen",
+      "model": "deepseek-v4-flash-free",
+      "label": ""
+    },
+    {
+      "id": "opencode_zen:mimo-v2.5-free",
+      "provider": "opencode zen",
+      "model": "mimo-v2.5-free",
+      "label": ""
+    }
+  ],
+  "default": "omlx:Qwen3.6-35B-A3B-OptiQ-4bit",
+  "agent_routes": {}
+}

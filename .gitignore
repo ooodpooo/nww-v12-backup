@@ -1,0 +1,60 @@
+__pycache__/
+*.pyc
+.DS_Store
+.workbuddy/memory/
+
+# 备份/打签文件一律不入库（仓库惯例：从不跟踪 .bak*）
+*.bak*
+
+# quality/ 纳入 git（2026-08-28）：隔离区与旧回滚区含 llm_client.py（外部评分器遗留，
+# 按质量体系铁律不进入版本库），保持磁盘可用但不追踪。
+quality/.quarantine_rb/
+quality/.rollback_20260827_1630/
+
+# 2026-09-03: 除 web/skills/docs/quality 外不再追踪（本地保留）
+.DS_Store
+.freebuff
+.rollback_ch1_rewrite_20260831
+.runtime
+.workbuddy
+PLAN-runtime.md
+_archive
+analyze_repetition.py
+downloads
+localskill
+nww
+oh-story-run
+projects
+research
+runtime
+基因库
+未标题-1.ai
+未标题-1.jpg
+竟品
+.env
+node_modules/
+
+# 备份/回滚目录与压缩包
+.rollback_*/
+.rollback_*.tar.gz
+
+# 临时目录
+.tmp/
+
+# 数据库文件（SQLite 等）
+*.db
+
+# 本地审计报告（HTML 快照）
+*_2026*.html
+nww_v12_*.html
+nww_rhythm_*.html
+nww_sentence_*.html
+
+# 敏感数据（用户凭证/邀请码）
+web/backend/app/codes.json
+web/backend/app/users.json
+
+# 2026-11-13：模型配置含 API Key，真实文件一律不入库（运行时生成于 runtime/config/）
+# 仓库只保留脱敏模板 web/backend/app/model_config.example.json
+web/backend/app/model_config.json
+runtime/config/model_config.json

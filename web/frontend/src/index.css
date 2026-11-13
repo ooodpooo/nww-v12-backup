@@ -1,0 +1,318 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 编辑器内容卡片。
+   max-width:100% 是必需的：面板宽度略小于 800px 时，固定 800px 会横向溢出
+   2px 并冒出横向滚动条（实测 clientW 798 / scrollW 800）。 */
+.editor-content {
+  width: 800px;
+  max-width: 100%;
+  box-sizing: border-box;
+  background-color: #141414;
+  min-height: 100%;
+}
+
+/* 选中文本 */
+::selection {
+  background: rgba(245, 158, 11, 0.28);
+}
+
+/* ── 细滚动条（全局，WebKit/Chromium）────────────────────────────────────────
+   滚动条宽度只能靠 ::-webkit-scrollbar 控制：一旦同时设置 scrollbar-width 或
+   scrollbar-color，Chromium 会改走平台滚动条路径并**忽略 webkit 宽度**。实测
+   同一容器的滚动条宽度：仅 webkit(6px)=6px、再加 scrollbar-width:thin=11px、
+   再加 scrollbar-color=15px。故此处刻意不设这两个标准属性，保证宽度恒为 6px，
+   「滚动条计入 12px 边距」的算法才成立（见 .card-scroll / .scroll-y）。 */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.32);
+  border-radius: 3px;
+  border: none;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(113, 113, 122, 0.55);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 滚动条隐藏模式：默认透明，滚动时显示。
+   只能用 webkit 伪元素实现——若改用 scrollbar-color，滚动条宽度会退化成 15px，
+   破坏「滚动条计入 12px 边距」的算法，而且滚动时宽度还会跳变。 */
+.scroll-reveal::-webkit-scrollbar-thumb {
+  background: transparent;
+  transition: background 0.2s;
+}
+.scroll-reveal.active::-webkit-scrollbar-thumb {
+  background: rgba(113, 113, 122, 0.4);
+}
+
+/* 表单控件继承字体（置于 base 层：低于 utilities，保证 text-[Npx] 等字号工具类能覆盖） */
+@layer base {
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+/* ── 三张卡片统一内边距（资产卡 / 追踪卡 / agent 卡）────────────────────────────
+   全站间距基准 = 12px。三张卡片的内容左右内边距必须走这一条规则，
+   不要再各自写 p-3 / p-6 / p-2.5 等不同规格。
+   置于 components 层：低于 utilities，仍可用 pb-* / pt-* 单独微调纵向。 */
+@layer components {
+  .card-pad {
+    padding: 12px;
+  }
+  .card-pad-x {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+}
+
+/* ── 滚动容器：滚动条（含其占位）计入 12px 边距，不再额外占宽 ────────────────
+   滚动条宽度恒为 6px（见文件头部说明），策略是「右侧让出滚动条宽度」：
+     · .card-scroll —— 自己带 12px 内边距的卡片滚动区，右内边距 12−6=6px；
+     · .scroll-y    —— 内边距由内容行自己承担的滚动区（如资产树 pr-*），
+                       只负责恒定预留 6px 滚动条车道。
+   两者都加 scrollbar-gutter: stable：无论有没有滚动条，右侧车道恒定预留，
+   内容位置不跳动（实测 overlay / 经典两种环境下右内边距都稳定为 12px）。 */
+@layer components {
+  .card-scroll {
+    padding: 12px 6px 12px 12px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+  }
+  .scroll-y {
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-gutter: stable;
+  }
+}
+
+/* ── 聊天气泡最大宽度（agent / 读者气泡共用）────────────────────────────────
+   口径 =「整张卡片宽」的 90%（不是内容区的 90%）。
+   气泡的父级是消息行，消息行的宽度 = 卡片内容区 = 卡片宽 − 2×12px(card-pad)。
+   故先用 100% + 24px 还原出卡片宽，再取 90%。改 card-pad 时需同步这里的 24px。 */
+@layer components {
+  .bubble-max {
+    /* 相对整张卡片（含 12px 内边距）取比例：100% 只是行内容盒，需补回 2*12px */
+    max-width: calc((100% + 24px) * 0.9);
+  }
+}
+
+/* ── 滚动边缘渐隐遮罩（追踪卡 / agent 卡共用）────────────────────────────────
+   内容滚到可视区边沿时淡出，避免半行硬截断。遮罩必须挂在滚动容器**外面**的
+   relative 包裹层上，否则会跟着内容一起滚走。
+
+   渐变色必须与卡片底色一致（VerticalSplit 两栏均为 #141414）。终止色写成
+   rgba(20,20,20,0) 而不是 `transparent`：后者等价于 rgba(0,0,0,0)，在部分渲染
+   路径下会插值出偏黑的灰带，与卡片底色对不齐。 */
+@layer components {
+  .edge-fade {
+    pointer-events: none;
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 28px;
+    z-index: 10;
+  }
+  .edge-fade-top {
+    top: 0;
+    background: linear-gradient(to bottom, #141414, rgba(20, 20, 20, 0));
+  }
+  .edge-fade-bottom {
+    bottom: 0;
+    background: linear-gradient(to top, #141414, rgba(20, 20, 20, 0));
+  }
+}
+
+/* ── V14 排列规范（2026-11-05）────────────────────────────────────────────
+   只改「排版 + 图标」：分组标题 / 圆角行 / 左侧竖条 / 18px 层级缩进 /
+   状态小徽标。所有色值沿用 V12 色板（#141414 #2a2a2a #cccccc #f59e0b），
+   不引入 V14 的深蓝底与绿色 accent。
+   口径集中在此：导航行、树行、分组标题共用同一组类，组件禁止各自写死行高。 */
+@layer components {
+  /* 分组标题：创作 / 资产 / 系统 …… */
+  .v14-group-title {
+    padding: 18px 12px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    color: #6a6a6a;
+  }
+  /* 纯图标栏（72px）专用：分组标题居中收小，保留分类文字但导航项不显示文字 */
+  .v14-group-title.is-compact {
+    padding: 14px 2px 6px;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-align: center;
+  }
+  .v14-group-divider {
+    width: 32px;
+    height: 1px;
+    margin: 12px auto;
+    background: #2a2a2a;
+  }
+
+  /* 导航行（左侧活动栏）：V14 = py-2 pl-4 pr-2 + rounded-md + 18px 图标 mr-3 */
+  .v14-nav-row {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 36px;
+    align-items: center;
+    border-radius: 6px;
+    padding: 8px 8px 8px 14px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #9a9a9a;
+    transition: background-color 0.15s, color 0.15s;
+    text-align: left;
+  }
+  .v14-nav-row:hover { background: #222222; color: #e0e0e0; }
+  .v14-nav-row.is-active { background: #2a2a2a; color: #ffffff; font-weight: 500; }
+  .v14-nav-row.is-active:hover { background: #2f2f2f; }
+
+  /* AI 实况 icon 颜色呼吸动画（任务运行中且面板关闭时）
+   * 2026-11-07 裁决：动画只作用于图标自身 color（lucide 的 stroke=currentColor），
+   * 不再改按钮外框（去掉 box-shadow 呼吸）。静息色沿用导航行常态 #9a9a9a，
+   * 峰值走 V12 琥珀 #f59e0b —— 灰 ↔ 琥珀缓慢呼吸，明显但不夸张。
+   * 类名挂在 <Icon> 上，不挂按钮，避免语义误导为整行状态。 */
+  .live-breathe {
+    animation: live-breathe-icon-anim 2.5s ease-in-out infinite;
+  }
+  @keyframes live-breathe-icon-anim {
+    0%, 100% { color: #9a9a9a; }
+    50% { color: #f59e0b; }
+  }
+  /* 选中态左侧竖条：V14 的 bg-primary 竖条，换成 V12 琥珀 */
+  .v14-nav-row.is-active::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    width: 4px;
+    height: 20px;
+    border-radius: 999px;
+    background: #f59e0b;
+    transform: translateY(-50%);
+  }
+  .v14-nav-row.is-collapsed { justify-content: center; padding: 10px 8px; }
+  .v14-nav-row.is-collapsed.is-active::before { left: 2px; height: 24px; }
+  .v14-nav-icon { width: 18px; height: 18px; flex-shrink: 0; margin-right: 12px; }
+  .v14-nav-row.is-collapsed .v14-nav-icon { margin: 0 auto; }
+
+  /* 树行（资产树）：min-h-9(36px) + rounded-md + paddingLeft = depth*18+6 */
+  .v14-tree-row {
+    position: relative;
+    display: flex;
+    width: 100%;
+    min-height: 36px;
+    align-items: center;
+    border-radius: 6px;
+    padding-right: 8px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #b8b8b8;
+    transition: background-color 0.15s, color 0.15s;
+    text-align: left;
+  }
+  .v14-tree-row:hover { background: #222222; color: #e6e6e6; }
+  .v14-tree-row.is-active { background: #2a2a2a; color: #ffffff; font-weight: 500; }
+  .v14-tree-row.is-active:hover { background: #2f2f2f; }
+  .v14-tree-row.is-active::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    width: 3px;
+    height: 18px;
+    border-radius: 999px;
+    background: #f59e0b;
+    transform: translateY(-50%);
+  }
+  .v14-tree-icon { width: 16px; height: 16px; flex-shrink: 0; color: #8a8a8a; }
+  .v14-tree-row.is-active .v14-tree-icon { color: #d8d8d8; }
+  .v14-chevron { width: 14px; height: 14px; flex-shrink: 0; color: #6a6a6a; }
+  .v14-leaf-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 999px; background: #4a4a4a; }
+
+  /* 层级引导竖线（V14 AssetTreeNavigator 的 w-px bg-border） */
+  .v14-guide {
+    position: absolute;
+    top: 0;
+    bottom: 4px;
+    width: 1px;
+    background: #2a2a2a;
+    pointer-events: none;
+  }
+
+  /* 目录分区标题：本书目录 / 小说资产 / 卷纲 / 设定 …… */
+  .v14-section-label {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 8px;
+    padding: 22px 12px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    color: #6a6a6a;
+    text-align: left;
+  }
+  .v14-section-label:first-child { padding-top: 12px; }
+  .v14-section-label:hover { color: #a8a8a8; }
+
+  /* 右侧状态：字数 / 文件数 / 待完善 */
+  .v14-meta { flex-shrink: 0; font-size: 10px; color: #6a6a6a; font-variant-numeric: tabular-nums; }
+  .v14-badge {
+    display: inline-flex;
+    height: 20px;
+    align-items: center;
+    flex-shrink: 0;
+    padding: 0 6px;
+    border: 1px solid #3a3a3a;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .v14-badge-amber { border-color: rgba(245, 158, 11, 0.45); color: #e0b25a; background: rgba(245, 158, 11, 0.10); }
+  .v14-badge-danger { border-color: rgba(224, 104, 95, 0.45); color: #e0685f; background: rgba(224, 104, 95, 0.12); }
+}
+
+/* 焦点态：仅表单控件显示，列表/按钮用背景高亮代替 */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[contenteditable]:focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.55);
+  outline-offset: 1px;
+}

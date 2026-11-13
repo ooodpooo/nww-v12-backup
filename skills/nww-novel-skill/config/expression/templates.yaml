@@ -1,0 +1,31 @@
+# Expression Memory 模板配置（v0.1）
+# 模板主体在 nww_expression_audit.py 中定义，此文件用于补充和覆盖
+
+# 额外的CANON词（bible和canon_list.txt之外的补充）
+extra_canon:
+  - 灵膳分号
+  - 聚灵堂二楼
+  - 外门执事
+  - 执事大人
+  - 林掌柜
+  - 温道友
+  - 老宋头
+  - 周管事
+  - 青布袍
+  - 背篓凡货
+
+# 额外的SIGNATURE词（bible和signature_list.txt之外的补充）
+extra_signature:
+  - 脸上的笑僵了
+  - 笑容塌了
+  - 珠子滚了一地
+  - 鬼使神差
+  - 翻来覆去
+  - 安安静静
+  - 清清楚楚
+  - 整整齐齐
+  - 干干净净
+  - 噼里啪啦
+
+# 模板覆盖（预留，v0.1暂不使用）
+template_overrides: {}

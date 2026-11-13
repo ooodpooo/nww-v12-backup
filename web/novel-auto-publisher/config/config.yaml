@@ -1,0 +1,24 @@
+# 自动发布系统主配置
+server:
+  host: 127.0.0.1
+  port: 8011
+
+database:
+  path: data/publisher.db
+
+browser:
+  headless: false
+  slow_mo: 100
+  timeout: 30000
+
+scheduler:
+  timezone: Asia/Shanghai
+  scan_interval: 300  # 秒
+
+retry:
+  max_attempts: 3
+  backoff_factor: 2
+
+notify:
+  enabled: false
+  channels: []

@@ -1,0 +1,36 @@
+{
+  "name": "nww-novel-skill",
+  "version": "1.0.0",
+  "description": "NWW-V12 网文生成 skill 包（纯 skill 模式）。整合：千章不崩子系统（追踪事务 nww_track_commit.py + 一致性检查 agent + 写前/写后确定性门禁 hooks）+ 产文质量子系统（去AI味 deslop 七门禁 + 三遍法 + 3 个确定性脚本）+ V12 生成方法论（硬事实锚 + 必种件兜底 + 主角境界守卫 + crack meter 纠偏 + nww_enforce 机械层）+ 市场与对标子系统（扫榜 nww-scan + 拆文 nww-analyze + 对标锚可选召回）。Claude Code 插件格式，可被 Claude Code / Codex / opencode 加载，WorkBuddy 亦可直读 SKILL.md。",
+  "author": "oodpoo",
+  "license": "MIT",
+  "keywords": [
+    "novel",
+    "webnovel",
+    "网文",
+    "写作",
+    "一致性",
+    "去AI味"
+  ],
+  "skills": [
+    "skills/long-write",
+    "skills/deslop",
+    "skills/consistency",
+    "skills/setup",
+    "skills/topic",
+    "skills/score90",
+    "skills/prealign",
+    "skills/revision",
+    "skills/analyze",
+    "skills/scan"
+  ],
+  "agents": [
+    "agents/consistency-checker",
+    "agents/narrative-writer",
+    "agents/nww-architect",
+    "agents/nww-character-designer",
+    "agents/nww-chapter-extractor",
+    "agents/nww-explorer",
+    "agents/nww-researcher"
+  ]
+}

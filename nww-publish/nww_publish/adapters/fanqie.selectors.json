@@ -1,0 +1,13 @@
+{
+  "_help": "运行 `nww-publish calibrate --platform fanqie` 启动浏览器、手动登录并进入「新建章节」编辑页后，工具会打印候选元素。把对应值填到下面的键：title_input=章节标题框，content_editor=正文编辑区，publish_button=发布按钮，draft_button=存草稿按钮（可选），success_indicator=发布成功后的标识（可选），new_chapter_button=「新建章节」入口按钮（可选，优先用 new_chapter_url）。 chapter_rows=章节管理页中「每章一行」的列表行选择器（用于对账读取已发到第几章），chapter_list_url 在 config.json 中配置。",
+  "new_chapter_button": null,
+  "title_input": null,
+  "content_editor": null,
+  "publish_button": null,
+  "draft_button": null,
+  "success_indicator": null,
+  "close_or_confirm": null,
+  "logged_in_selector": null,
+  "login_form_selector": null,
+  "chapter_rows": null
+}
